@@ -1,7 +1,93 @@
 sudo: false
-install: git clone https://github.com/sstephenson/bats.git
-script: bats/bin/bats --tap test
 language: c
+
+env:
+  global:
+    - VIRTUAL_ENV_BASE=~/virtualenv
+    - VIRTUAL_ENV_VERSION_SPEC='<13'
+
+matrix:
+  old:
+    # Plain bats
+
+    - env: BATS=1
+      addons: false
+
+  include:
+    # CPython
+
+    - env: TESTENV=2.7.11,3.2.6,3.4.4
+      dist: precise
+
+    # Stackless
+
+    - env: TESTENV=stackless-3.4.1,stackless-dev
+      dist: precise
+
+    # PyPy
+
+    - env: TESTENV=pypy-2.4.0,pypy-5.1.1,pypy-c-jit-latest,pypy-c-nojit-latest
+      dist: precise
+
+    # Jython
+
+    - env: TESTENV=jython-2.7.0,jython-dev
+      # VIRTUAL_ENV_VERSION_SPEC='==1.7.1.2'
+      dist: precise
+
+    # Anaconda/Miniconda
+    # The shipped libs need to be added to LD_LIBRARY_PATH because
+    # otherwise virtualenv fails with:
+    # Anaconda/Miniconda 2: _io.so: undefined symbol: _PyCodec_LookupTextEncoding
+    # Anaconda/Miniconda 3: failed to load libpython3.5m.so.1.0
+
+    - env: TESTENV=miniconda2-4.0.5,anaconda3-4.0.0,miniconda3-4.0.5
+      # VIRTUAL_ENV_ADD_LIB_PATH=1
+      dist: precise
+
+install:
+  - git clone --depth 1 https://github.com/sstephenson/bats.git
+  - |
+    if [[ "${TESTENV%-*}" == 'ironpython' ]]; then
+      echo "binfmt_misc /proc/sys/fs/binfmt_misc binfmt_misc none" | sudo tee -a /etc/fstab
+      echo ':CLR:M::MZ::/usr/bin/mono:' | sudo tee /proc/sys/fs/binfmt_misc/register
+    fi
+
+script:
+  - if [[ "$TESTENV" == '' ]]; then bats/bin/bats --tap test; fi
+  - |
+    git clone https://github.com/yyuu/pyenv.git ~/.pyenv
+    export PYENV_ROOT=~/.pyenv
+    ln -s `pwd` ~/.pyenv/plugins/pyenv-virtualenv
+    $PYENV_ROOT/bin/pyenv virtualenv --version
+    echo 'PATH=$PYENV_ROOT/bin/:$PATH' >> ~/.bash_profile
+    echo 'PYENV_ROOT=~/.pyenv' >> ~/.bash_profile
+    echo 'eval "$(pyenv init -)"' >> ~/.bash_profile
+    echo 'eval "$(pyenv virtualenv-init -)"' >> ~/.bash_profile
+    # pip install --user --upgrade 'virtualenv'"$VIRTUAL_ENV_VERSION_SPEC"
+    # virtualenv --version
+    for PYENV_VERSION in ${TESTENV//,/ }; do
+      $PYENV_ROOT/bin/pyenv install "$PYENV_VERSION"
+      if [[ -x $PYENV_ROOT/versions/$PYENV_VERSION/bin/python ]]; then
+        $PYENV_ROOT/versions/$PYENV_VERSION/bin/python --version
+        if [[ "$VIRTUAL_ENV_ADD_LIB_PATH" == '1' ]]; then
+          export LD_LIBRARY_PATH="$PYENV_ROOT/versions/$PYENV_VERSION/lib/"
+        fi
+        $PYENV_ROOT/bin/pyenv virtualenv $PYENV_VERSION "my-$PYENV_VERSION"
+        echo "Virtual env created"
+        $PYENV_ROOT/bin/pyenv global "my-$PYENV_VERSION"
+        mkdir -p /tmp/venv_test/"my-$PYENV_VERSION"
+        pushd /tmp/venv_test/"my-$PYENV_VERSION"
+        $PYENV_ROOT/bin/pyenv local "my-$PYENV_VERSION"
+        # bash -c "$PYENV_ROOT/bin/pyenv activate my-$PYENV_VERSION"
+        bash --login -c "python --version"
+        popd
+      else
+        exit 1
+      fi
+      export LD_LIBRARY_PATH=""
+    done
+
 notifications:
   email:
     on_success: never
